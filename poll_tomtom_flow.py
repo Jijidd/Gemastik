@@ -51,7 +51,43 @@ RETRY_BACKOFF_BASE = 2.0  # detik, dikali 2^percobaan
 # monitoring di ruas itu, dan mengembalikan segmen fallback yang jauh.
 MAX_MATCH_DISTANCE_M = 150
 
+# Skema kolom TETAP -- SATU-SATUNYA sumber kebenaran urutan/nama kolom.
+# Kalau nanti perlu menambah field baru, tambahkan di sini, dan fungsi
+# simpan_hasil_polling() di bawah akan otomatis memigrasi file lama yang
+# skemanya belum punya kolom itu (diisi NaN untuk baris lama), BUKAN
+# menyebabkan schema drift seperti yang sempat terjadi sebelumnya.
+SKEMA_KOLOM = [
+    "timestamp_utc", "edge_id", "requested_lat", "requested_lon", "highway_tag",
+    "frc", "currentSpeed", "freeFlowSpeed", "currentTravelTime", "freeFlowTravelTime",
+    "confidence", "roadClosure", "matched_lat", "matched_lon",
+    "match_distance_m", "valid_match", "error",
+]
 
+
+def simpan_hasil_polling(hasil_df, output_path):
+    """
+    Simpan hasil polling ke CSV harian dengan APPEND yang aman terhadap
+    perubahan skema. Kalau file sudah ada tapi headernya beda dari
+    SKEMA_KOLOM saat ini (mis. kode di-update di tengah hari), file lama
+    otomatis dimigrasi dulu (kolom baru diisi NaN untuk baris lama) sebelum
+    baris baru ditambahkan -- supaya tidak pernah terjadi campur skema di
+    satu file yang bikin pd.read_csv gagal parse.
+    """
+    output_path = Path(output_path)
+    hasil_df = hasil_df.reindex(columns=SKEMA_KOLOM)
+
+    if output_path.exists():
+        header_lama = pd.read_csv(output_path, nrows=0).columns.tolist()
+        if header_lama != SKEMA_KOLOM:
+            print(f"PERINGATAN: skema file lama ({len(header_lama)} kolom) berbeda dari "
+                  f"skema kode saat ini ({len(SKEMA_KOLOM)} kolom). Memigrasi file lama...")
+            df_lama = pd.read_csv(output_path)
+            df_lama = df_lama.reindex(columns=SKEMA_KOLOM)  # kolom baru otomatis jadi NaN
+            df_lama.to_csv(output_path, index=False)  # tulis ulang dgn skema baru
+            print(f"Migrasi selesai: {output_path} sekarang konsisten {len(SKEMA_KOLOM)} kolom.")
+
+    header_diperlukan = not output_path.exists()
+    hasil_df.to_csv(output_path, mode="a", index=False, header=header_diperlukan)
 # =========================================================
 # 1. PERHITUNGAN KELAYAKAN KUOTA -- jalankan ini DULU sebelum polling sungguhan
 # =========================================================
@@ -287,8 +323,7 @@ def jalankan_satu_siklus_polling():
     output_path = Path(OUTPUT_DIR) / f"poll_{tanggal_hari_ini}.csv"
 
     hasil_df = pd.DataFrame(hasil_rows)
-    header_diperlukan = not output_path.exists()
-    hasil_df.to_csv(output_path, mode="a", index=False, header=header_diperlukan)
+    simpan_hasil_polling(hasil_df, output_path)
 
     print(f"\nTersimpan (append) ke: {output_path}")
 
