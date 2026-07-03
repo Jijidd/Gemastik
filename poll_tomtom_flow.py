@@ -45,6 +45,12 @@ UNIT = "kmph"
 MAX_RETRIES = 4
 RETRY_BACKOFF_BASE = 2.0  # detik, dikali 2^percobaan
 
+# Ambang jarak (meter) antara titik yang diminta vs titik yang benar-benar
+# dicocokkan TomTom. Kalau jaraknya melebihi ini, data dianggap TIDAK VALID
+# untuk edge tersebut -- kemungkinan TomTom tidak punya cakupan traffic
+# monitoring di ruas itu, dan mengembalikan segmen fallback yang jauh.
+MAX_MATCH_DISTANCE_M = 150
+
 
 # =========================================================
 # 1. PERHITUNGAN KELAYAKAN KUOTA -- jalankan ini DULU sebelum polling sungguhan
@@ -121,6 +127,15 @@ def cetak_tabel_skenario(n_edges):
 # =========================================================
 # 2. FUNGSI POLLING SATU TITIK (dengan retry & backoff)
 # =========================================================
+def haversine_m(lat1, lon1, lat2, lon2):
+    R = 6371000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
 def poll_satu_titik(session, lat, lon, api_key, style=STYLE, zoom=ZOOM, unit=UNIT,
                      max_retries=MAX_RETRIES, timeout=10):
     url = f"https://api.tomtom.com/traffic/services/4/flowSegmentData/{style}/{zoom}/json"
@@ -141,6 +156,15 @@ def poll_satu_titik(session, lat, lon, api_key, style=STYLE, zoom=ZOOM, unit=UNI
 
         if resp.status_code == 200:
             data = resp.json().get("flowSegmentData", {})
+            matched_lat = data.get("coordinates", {}).get("coordinate", [{}])[0].get("latitude")
+            matched_lon = data.get("coordinates", {}).get("coordinate", [{}])[0].get("longitude")
+
+            jarak = None
+            valid = None
+            if matched_lat is not None and matched_lon is not None:
+                jarak = haversine_m(lat, lon, matched_lat, matched_lon)
+                valid = jarak <= MAX_MATCH_DISTANCE_M
+
             return {
                 "frc": data.get("frc"),
                 "currentSpeed": data.get("currentSpeed"),
@@ -149,8 +173,10 @@ def poll_satu_titik(session, lat, lon, api_key, style=STYLE, zoom=ZOOM, unit=UNI
                 "freeFlowTravelTime": data.get("freeFlowTravelTime"),
                 "confidence": data.get("confidence"),
                 "roadClosure": data.get("roadClosure"),
-                "matched_lat": data.get("coordinates", {}).get("coordinate", [{}])[0].get("latitude"),
-                "matched_lon": data.get("coordinates", {}).get("coordinate", [{}])[0].get("longitude"),
+                "matched_lat": matched_lat,
+                "matched_lon": matched_lon,
+                "match_distance_m": jarak,
+                "valid_match": valid,
                 "error": None,
             }
 
