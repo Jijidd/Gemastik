@@ -1,0 +1,56 @@
+name: Poll TomTom Flow Segment Data
+
+on:
+  # Jadwal otomatis -- SESUAIKAN interval di sini setelah keputusan final
+  # cakupan edge (lihat diskusi trade-off kuota sebelumnya). Contoh di bawah:
+  # tiap 30 menit. Minimum GitHub Actions adalah 5 menit, tapi ingat itu
+  # cuma soal seberapa sering SCRIPT jalan -- bukan berarti tiap edge
+  # otomatis dipoll ulang secepat itu (tergantung n_groups hasil rotasi).
+  schedule:
+    - cron: '7,37 * * * *'   # menit ke-7 dan ke-37 tiap jam (hindari pas jam bulat, biar tak kena antrean padat)
+
+  # Supaya bisa dites manual dulu dari tab Actions di GitHub, tanpa nunggu jadwal
+  workflow_dispatch: {}
+
+# WAJIB: cegah dua run jalan bersamaan (kalau run sebelumnya masih jalan/telat
+# selesai saat jadwal berikutnya tiba). Run baru akan MENUNGGU giliran, bukan
+# jalan paralel -- ini penting supaya polling_state.json tidak balapan ditulis
+# dua proses sekaligus (race condition yang bisa merusak urutan rotasi grup).
+concurrency:
+  group: tomtom-polling
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # perlu izin tulis supaya job bisa commit & push hasil balik ke repo
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10   # jaga-jaga kalau macet, jangan sampai menghabiskan menit gratis
+
+    steps:
+      - name: Checkout repo (ambil state & hasil polling terakhir)
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Jalankan satu siklus polling
+        env:
+          TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
+        run: python poll_tomtom_flow.py
+
+      - name: Commit & push hasil polling + state terbaru
+        run: |
+          git config user.name "tomtom-polling-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add polling_results/ polling_state.json
+          # Kalau tidak ada perubahan (mis. semua request gagal, file identik),
+          # 'git commit' akan gagal -- tangani supaya workflow tidak error karenanya.
+          git diff --staged --quiet && echo "Tidak ada perubahan untuk di-commit." || \
+            (git commit -m "Polling TomTom $(date -u +'%Y-%m-%d %H:%M UTC')" && git push)
