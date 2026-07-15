@@ -46,8 +46,10 @@ def pilih_segmen_bersambung(topo_df, n_segmen):
         edge_by_from[row["from"]].append(idx)
 
     import random
-    
-    # Ambil index secara acak, coba jalankan beberapa kali di GitHub Actions
+    random.seed(42)   # DETERMINISTIK -- supaya bisa diuji ulang di lokasi SAMA, bukan acak tiap run
+
+    # Ambil index secara tetap (seeded). Untuk debugging terarah, bisa juga
+    # override manual: start_idx = 439  (segmen yg SUDAH TERBUKTI match baik)
     start_idx = random.choice(topo_df.index.tolist())
     
     chain = [start_idx]
@@ -151,18 +153,35 @@ def tile_local_ke_lonlat(x_local, y_local, extent, tile_bounds):
 # =========================================================
 # 4. COCOKKAN FITUR HASIL DECODE KE SEGMEN TARGET (nearest-line matching)
 # =========================================================
+def hitung_bearing(geom):
+    """Arah garis (derajat, 0-360) dari titik awal ke titik akhir LineString."""
+    coords = list(geom.coords)
+    lon1, lat1 = coords[0]
+    lon2, lat2 = coords[-1]
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    return math.degrees(math.atan2(dlon, dlat)) % 360
+
+
+def selisih_bearing(b1, b2):
+    """Selisih sudut terkecil antara dua bearing (0-180 derajat), mengabaikan arah."""
+    diff = abs(b1 - b2) % 180
+    return min(diff, 180 - diff)
+
+
 def cocokkan_fitur_ke_segmen(decoded_tile, zoom, xtile, ytile, segmen_target_geoms,
-                              threshold_m=30.0):
+                              threshold_m=30.0, threshold_bearing_deg=25.0,
+                              road_type_expected=None):
     """
-    segmen_target_geoms: list of shapely LineString (lon/lat) segmen yang kita cari.
-    Return: list hasil match (index segmen target, jarak, properti speed).
+    Ditambahkan: kandidat HARUS juga punya bearing (arah) mirip target -- ini
+    memfilter kasus "jalan sejajar/lajur berlawanan" yang lolos threshold jarak
+    tapi sebenarnya bukan segmen yang sama. Juga cetak peringatan kalau road_type
+    hasil match tidak konsisten dengan ekspektasi (topologi v2 seharusnya arteri).
     """
     lat_max, lon_min = num2deg(xtile, ytile, zoom)
     lat_min, lon_max = num2deg(xtile + 1, ytile + 1, zoom)
     tile_bounds = (lon_min, lat_min, lon_max, lat_max)
 
-    # Cari layer yang relevan -- nama layer bisa "Traffic flow" atau serupa,
-    # ambil semua layer yg ada & cek isinya (tidak diasumsikan nama pasti).
     semua_fitur_geoms = []
     for layer_name, layer_data in decoded_tile.items():
         extent = layer_data.get("extent", 4096)
@@ -187,19 +206,42 @@ def cocokkan_fitur_ke_segmen(decoded_tile, zoom, xtile, ytile, segmen_target_geo
     hasil_match = []
     for i, target_geom in enumerate(segmen_target_geoms):
         target_mid = target_geom.interpolate(0.5, normalized=True)
-        jarak_terdekat = float("inf")
-        fitur_terdekat = None
+        target_bearing = hitung_bearing(target_geom)
+
+        # Kumpulkan SEMUA kandidat dlm threshold jarak, urutkan yg bearing-nya
+        # paling mirip target JADI PRIORITAS (bukan cuma jarak terdekat mentah)
+        kandidat_valid = []
         for f in semua_fitur_geoms:
-            jarak = target_mid.distance(f["geometry"]) * 111000  # derajat -> meter kasar
-            if jarak < jarak_terdekat:
-                jarak_terdekat = jarak
-                fitur_terdekat = f
-        valid = jarak_terdekat <= threshold_m
+            jarak = target_mid.distance(f["geometry"]) * 111000
+            if jarak <= threshold_m:
+                bearing_f = hitung_bearing(f["geometry"])
+                sel_bearing = selisih_bearing(target_bearing, bearing_f)
+                kandidat_valid.append((jarak, sel_bearing, f))
+
+        # Prioritas: bearing dulu (harus < threshold_bearing_deg), baru jarak terdekat
+        kandidat_valid = [k for k in kandidat_valid if k[1] <= threshold_bearing_deg]
+        kandidat_valid.sort(key=lambda k: k[0])
+
+        if kandidat_valid:
+            jarak_terpilih, bearing_terpilih, fitur_terpilih = kandidat_valid[0]
+            valid = True
+        else:
+            jarak_terpilih, bearing_terpilih, fitur_terpilih = None, None, None
+            valid = False
+
+        road_type_match = fitur_terpilih["properties"].get("road_type") if fitur_terpilih else None
+        peringatan_road_type = (
+            road_type_expected is not None and road_type_match is not None
+            and road_type_match != road_type_expected
+        )
+
         hasil_match.append({
             "segmen_target_idx": i,
-            "jarak_ke_fitur_terdekat_m": jarak_terdekat,
+            "jarak_ke_fitur_terdekat_m": jarak_terpilih,
+            "selisih_bearing_deg": bearing_terpilih,
             "valid_match": valid,
-            "properties": fitur_terdekat["properties"] if fitur_terdekat else None,
+            "properties": fitur_terpilih["properties"] if fitur_terpilih else None,
+            "peringatan_road_type_beda": peringatan_road_type,
         })
 
     return hasil_match
@@ -255,10 +297,16 @@ def jalankan_uji_coba():
 
     print(f"\n{'='*60}\nHASIL MATCHING\n{'='*60}")
     for h in hasil_match:
-        status = "VALID" if h["valid_match"] else "TIDAK VALID (terlalu jauh)"
+        status = "VALID" if h["valid_match"] else "TIDAK VALID (jarak/bearing tidak cocok)"
+        jarak_str = f"{h['jarak_ke_fitur_terdekat_m']:.1f}m" if h['jarak_ke_fitur_terdekat_m'] is not None else "N/A"
+        bearing_str = f"{h['selisih_bearing_deg']:.1f}°" if h['selisih_bearing_deg'] is not None else "N/A"
         print(f"Segmen idx {chain_idx[h['segmen_target_idx']]}: "
-              f"jarak={h['jarak_ke_fitur_terdekat_m']:.1f}m [{status}]")
+              f"jarak={jarak_str}, selisih_bearing={bearing_str} [{status}]")
         print(f"  properti: {h['properties']}")
+        if h["peringatan_road_type_beda"]:
+            print(f"  ** PERINGATAN: road_type tile ({h['properties'].get('road_type')}) "
+                  f"tidak sesuai ekspektasi (topologi v2 seharusnya arteri) -- "
+                  f"kemungkinan match salah sasaran, PERIKSA MANUAL **")
 
     n_valid = sum(1 for h in hasil_match if h["valid_match"])
     print(f"\nRingkasan: {n_valid}/{len(hasil_match)} segmen berhasil match dgn valid.")
