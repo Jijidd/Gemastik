@@ -1,31 +1,18 @@
-# Simpan di: .github/workflows/uji_polling.yml
-#
-# INI SKRIP UJI COBA/VALIDASI (bukan polling rutin) -- sengaja HANYA manual
-# trigger (workflow_dispatch), TIDAK ada cron. Tujuannya memverifikasi:
-#   (a) zoom level yang dipilih otomatis cukup akurat menangkap geometri
-#       segmen target, dan
-#   (b) hasil decode tile bisa dicocokkan balik ke segmen kita dengan jarak
-#       kecil (valid_match=True untuk mayoritas/semua segmen uji).
-#
-# Setelah run ini beberapa kali dan hasilnya konsisten bagus, baru pertimbangkan
-# bikin workflow polling RUTIN terpisah (dengan cron) yang pakai logic serupa
-# tapi untuk seluruh koridor target + simpan hasil ke CSV per waktu polling
-# (skrip berbeda, belum dibuat -- ini murni utk tahap validasi dulu).
-
-name: Uji Polling Vector Flow Tiles (manual)
+name: Uji Coba Vector Flow Tiles (Skala Kecil)
 
 on:
-  workflow_dispatch:
-    inputs:
-      n_segmen:
-        description: "Jumlah segmen bersambung yang diuji (2 atau 3)"
-        required: false
-        default: "3"
+  # HANYA manual -- ini uji coba sekali jalan, BUKAN polling rutin, jadi
+  # tidak perlu 'schedule' seperti workflow poll_tomtom.yml sebelumnya.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read   # cukup baca -- skrip ini tidak perlu commit apapun balik ke repo
 
 jobs:
-  uji-polling:
+  uji-coba:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -33,18 +20,20 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install requests pandas numpy shapely mapbox-vector-tile pyproj
+        run: pip install mapbox-vector-tile requests shapely pandas numpy pyproj
 
-      - name: Jalankan uji_polling.py
+      - name: Jalankan uji coba, simpan output ke log file
         env:
           TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
-        run: python uji_polling.py
+        run: python uji_polling.py | tee hasil_uji_tile.log
 
-      # Semua print() di uji_polling.py otomatis masuk ke log job di atas --
-      # tab Actions -> pilih run ini -> klik step "Jalankan uji_polling.py"
-      # untuk baca hasil lengkap (pemilihan zoom, jumlah fitur decode,
-      # hasil matching per segmen, dst).
+      - name: Upload hasil sebagai artifact (bisa diunduh dari tab Actions)
+        if: always()   # tetap upload log meski script error, utk debugging
+        uses: actions/upload-artifact@v4
+        with:
+          name: hasil-uji-vector-tile
+          path: hasil_uji_tile.log
+          retention-days: 7
