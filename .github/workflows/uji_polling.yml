@@ -28,7 +28,9 @@ jobs:
       - name: Jalankan uji coba, simpan output ke log file
         env:
           TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
-        run: python uji_polling.py | tee hasil_uji_tile.log
+          PYTHONUNBUFFERED: "1"  # Memaksa Python agar tidak menahan log di memori
+        # Tambahkan -u pada python dan 2>&1 sebelum pipe tee
+        run: python -u uji_polling.py 2>&1 | tee hasil_uji_tile.log
 
       - name: Upload hasil sebagai artifact (bisa diunduh dari tab Actions)
         if: always()   # tetap upload log meski script error, utk debugging
