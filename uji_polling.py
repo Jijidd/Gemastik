@@ -45,7 +45,11 @@ def pilih_segmen_bersambung(topo_df, n_segmen):
     for idx, row in topo_df.iterrows():
         edge_by_from[row["from"]].append(idx)
 
-    start_idx = 0
+    import random
+    
+    # Ambil index secara acak, coba jalankan beberapa kali di GitHub Actions
+    start_idx = random.choice(topo_df.index.tolist())
+    
     chain = [start_idx]
     current_to = topo_df.loc[start_idx, "to"]
 
