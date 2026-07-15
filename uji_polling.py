@@ -163,6 +163,28 @@ def hitung_bearing(geom):
     return math.degrees(math.atan2(dlon, dlat)) % 360
 
 
+def bearing_lokal_di_titik_terdekat(line, point):
+    """
+    PENTING: bearing GLOBAL (ujung-ke-ujung) fitur tile bisa menyesatkan kalau
+    fiturnya panjang/melengkung -- jalan yg sama bisa punya arah global sangat
+    beda dari arah LOKAL di titik yg sebenarnya berdekatan dgn target. Fungsi
+    ini menghitung bearing HANYA dari segmen lokal (2 vertex) di sekitar titik
+    proyeksi terdekat, bukan dari seluruh LineString.
+    """
+    coords = list(line.coords)
+    if len(coords) < 2:
+        return hitung_bearing(line)
+    proj_dist = line.project(point)
+    cum = 0.0
+    for i in range(len(coords) - 1):
+        seg = LineString([coords[i], coords[i + 1]])
+        seg_len = seg.length
+        if cum + seg_len >= proj_dist or i == len(coords) - 2:
+            return hitung_bearing(seg)
+        cum += seg_len
+    return hitung_bearing(line)
+
+
 def selisih_bearing(b1, b2):
     """Selisih sudut terkecil antara dua bearing (0-180 derajat), mengabaikan arah."""
     diff = abs(b1 - b2) % 180
@@ -210,16 +232,27 @@ def cocokkan_fitur_ke_segmen(decoded_tile, zoom, xtile, ytile, segmen_target_geo
 
         # Kumpulkan SEMUA kandidat dlm threshold jarak, urutkan yg bearing-nya
         # paling mirip target JADI PRIORITAS (bukan cuma jarak terdekat mentah)
+        semua_kandidat_dbg = []   # utk diagnostik -- termasuk yg DITOLAK
         kandidat_valid = []
         for f in semua_fitur_geoms:
             jarak = target_mid.distance(f["geometry"]) * 111000
             if jarak <= threshold_m:
-                bearing_f = hitung_bearing(f["geometry"])
-                sel_bearing = selisih_bearing(target_bearing, bearing_f)
-                kandidat_valid.append((jarak, sel_bearing, f))
+                titik_terdekat = f["geometry"].interpolate(f["geometry"].project(target_mid))
+                bearing_f_lokal = bearing_lokal_di_titik_terdekat(f["geometry"], target_mid)
+                sel_bearing = selisih_bearing(target_bearing, bearing_f_lokal)
+                semua_kandidat_dbg.append((jarak, sel_bearing, f["properties"].get("road_type")))
+                if sel_bearing <= threshold_bearing_deg:
+                    kandidat_valid.append((jarak, sel_bearing, f))
+
+        # DIAGNOSTIK: cetak kandidat yg lolos jarak tapi DITOLAK bearing, supaya
+        # kelihatan apakah threshold_bearing_deg perlu dilonggarkan
+        if not kandidat_valid and semua_kandidat_dbg:
+            print(f"  [debug segmen idx {i}] {len(semua_kandidat_dbg)} kandidat lolos jarak "
+                  f"tapi DITOLAK bearing (target_bearing={target_bearing:.1f}°):")
+            for jarak_dbg, sel_bearing_dbg, rt_dbg in semua_kandidat_dbg:
+                print(f"    jarak={jarak_dbg:.1f}m, selisih_bearing={sel_bearing_dbg:.1f}°, road_type={rt_dbg}")
 
         # Prioritas: bearing dulu (harus < threshold_bearing_deg), baru jarak terdekat
-        kandidat_valid = [k for k in kandidat_valid if k[1] <= threshold_bearing_deg]
         kandidat_valid.sort(key=lambda k: k[0])
 
         if kandidat_valid:
