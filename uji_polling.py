@@ -121,7 +121,7 @@ def pilih_zoom_optimal(lat_center, bbox_diagonal_m, zoom_candidates,
 # 3. AMBIL & DECODE VECTOR TILE
 # =========================================================
 def ambil_dan_decode_tile(zoom, xtile, ytile, api_key):
-    url = f"https://api.tomtom.com/traffic/services/4/tile/flow/absolute/{zoom}/{xtile}/{ytile}.pbf"
+    url = f"https://api.tomtom.com/traffic/map/4/tile/flow/absolute/{zoom}/{xtile}/{ytile}.pbf"
     params = {"key": api_key}
     resp = requests.get(url, params=params, timeout=15)
 
