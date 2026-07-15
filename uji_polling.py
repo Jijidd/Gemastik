@@ -230,6 +230,17 @@ def cocokkan_fitur_ke_segmen(decoded_tile, zoom, xtile, ytile, segmen_target_geo
         target_mid = target_geom.interpolate(0.5, normalized=True)
         target_bearing = hitung_bearing(target_geom)
 
+        # DIAGNOSTIK TAMBAHAN: cari jarak ke kandidat TERDEKAT tanpa peduli threshold
+        # sama sekali -- supaya kelihatan apakah memang tidak ada fitur di sekitar
+        # sini, atau cuma "sedikit" di luar threshold.
+        jarak_absolut_terdekat = min(
+            (target_mid.distance(f["geometry"]) * 111000 for f in semua_fitur_geoms),
+            default=None
+        )
+        if jarak_absolut_terdekat is not None:
+            print(f"  [debug segmen idx {i}] Fitur TERDEKAT tanpa batas threshold: "
+                  f"{jarak_absolut_terdekat:.1f}m (threshold saat ini: {threshold_m}m)")
+
         # Kumpulkan SEMUA kandidat dlm threshold jarak, urutkan yg bearing-nya
         # paling mirip target JADI PRIORITAS (bukan cuma jarak terdekat mentah)
         semua_kandidat_dbg = []   # utk diagnostik -- termasuk yg DITOLAK
