@@ -299,7 +299,7 @@ def jalankan_satu_siklus_polling():
             "edge_id": row.edge_id,
             "requested_lat": row.lat,
             "requested_lon": row.lon,
-            "highway_tag": row.highway_tag,
+            "highway_tag": getattr(row, "highway_tag", "unknown"),
             **hasil,
         }
         hasil_rows.append(rekaman)
