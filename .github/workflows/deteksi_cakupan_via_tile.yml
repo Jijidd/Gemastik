@@ -1,0 +1,47 @@
+name: Deteksi Cakupan Seluruh Jaksel via Vector Flow Tiles
+
+on:
+  # Manual saja -- ini selesai SEKALI JALAN (puluhan-ratusan tile, jauh di
+  # bawah kuota harian), tidak perlu jadwal berulang spt screening per-titik.
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # perlu commit balik hasil CSV ke repo
+
+jobs:
+  deteksi-cakupan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20   # ~200 tile request + matching 5700 segmen, kasih buffer
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install mapbox-vector-tile requests shapely pandas numpy pyproj
+
+      - name: Jalankan deteksi cakupan via tile
+        env:
+          TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
+        run: python deteksi_cakupan_via_tile.py
+
+      - name: Commit & push hasil cakupan
+        run: |
+          git config user.name "deteksi-cakupan-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add cakupan_seluruh_jaksel_via_tile.csv
+          git diff --staged --quiet && echo "Tidak ada perubahan." || \
+            (git commit -m "Deteksi cakupan Jaksel via tile: $(date -u +'%Y-%m-%d %H:%M UTC')" && git push)
+
+      - name: Upload hasil sebagai artifact (cadangan, bisa diunduh langsung)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hasil-deteksi-cakupan-tile
+          path: cakupan_seluruh_jaksel_via_tile.csv
+          retention-days: 14
