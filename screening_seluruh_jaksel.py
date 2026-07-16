@@ -190,7 +190,22 @@ def main():
     hasil_df = pd.DataFrame(hasil_rows)
     simpan_hasil(hasil_df, OUTPUT_CSV)
 
-    n_valid_batch = hasil_df["valid_match"].sum()
+    # Pakai versi yg sudah direindex ke SKEMA_KOLOM (spt yg dipakai simpan_hasil)
+    # -- kalau SELURUH batch gagal (mis. kuota habis tepat di tengah batch),
+    # kolom 'valid_match' bisa sama sekali tidak ada di hasil_df mentah krn
+    # poll_satu_titik cuma mengembalikan {"error": ...} saat gagal, TANPA
+    # key lain sama sekali. Reindex dulu spy tidak crash, isi NaN dianggap 0.
+    hasil_df_lengkap = hasil_df.reindex(columns=SKEMA_KOLOM)
+    n_valid_batch = hasil_df_lengkap["valid_match"].fillna(False).astype(bool).sum()
+    n_error_batch = hasil_df_lengkap["error"].notna().sum()
+
+    if n_error_batch == len(hasil_df_lengkap):
+        print(f"\n{'!'*60}")
+        print(f"PERINGATAN KRITIS: SELURUH {len(hasil_df_lengkap)} request di batch ini GAGAL.")
+        print(f"Ini indikasi kuat KUOTA HARIAN TomTom sudah habis (bukan bug kode).")
+        print(f"Cek dashboard developer.tomtom.com utk angka pasti sisa kuota sebelum")
+        print(f"mencoba lagi -- jangan paksa run ulang kalau kuota memang sudah 0.")
+        print(f"{'!'*60}")
     print(f"\nBatch selesai: {n_valid_batch}/{len(hasil_df)} valid di run ini.")
     print(f"Tersimpan (append): {OUTPUT_CSV}")
 
