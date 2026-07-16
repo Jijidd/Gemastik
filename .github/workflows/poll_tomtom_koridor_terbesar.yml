@@ -1,0 +1,49 @@
+name: Poll TomTom Flow Segment Data (Koridor Bersambung Terbesar)
+
+on:
+  # Tiap 15 menit -- SESUAI granularitas native TomTom & dataset Beijing.
+  # Karena 221 edge > kapasitas kuota/15menit, poll_tomtom_flow.py otomatis
+  # merotasi ~10 grup internal -- 1 edge yg sama ter-update ulang tiap ~2,5 jam
+  # (lihat hasil --rencana sebelumnya), TAPI script tetap harus dipicu tiap
+  # 15 menit spy rotasinya berjalan sesuai jadwal.
+  schedule:
+    - cron: '*/15 * * * *'
+
+  workflow_dispatch: {}   # bisa juga dipicu manual kapan saja utk tes
+
+concurrency:
+  group: poll-tomtom-koridor-terbesar
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # perlu commit balik hasil CSV & state rotasi ke repo
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo (ambil state & hasil polling terakhir)
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pandas numpy
+
+      - name: Jalankan satu siklus polling
+        env:
+          TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
+        run: python poll_tomtom_flow.py
+
+      - name: Commit & push hasil polling + state terbaru
+        run: |
+          git config user.name "tomtom-polling-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add polling_results/ polling_state.json
+          git diff --staged --quiet && echo "Tidak ada perubahan untuk di-commit." || \
+            (git commit -m "Polling koridor terbesar: $(date -u +'%Y-%m-%d %H:%M UTC')" && git push)
