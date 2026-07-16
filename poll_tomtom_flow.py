@@ -29,7 +29,7 @@ from pathlib import Path
 # KONFIGURASI
 # =========================================================
 API_KEY = os.environ.get("TOMTOM_API_KEY", "")  # JANGAN hardcode API key di kode!
-POLLING_POINTS_CSV = "polling_points.csv"
+POLLING_POINTS_CSV = "polling_points_graf_terbesar.csv"
 OUTPUT_DIR = "polling_results"
 STATE_FILE = "polling_state.json"
 
