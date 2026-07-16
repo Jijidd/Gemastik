@@ -39,7 +39,7 @@ OUTPUT_CSV = "cakupan_seluruh_jaksel_via_tile.csv"
 ZOOM_TILE = 15              # ~192 tile utk seluruh Jaksel -- ubah ke 14 kalau
                              # mau lebih cepat lagi (lebih kasar) atau 16 kalau
                              # mau lebih detail (lebih banyak tile, msh aman kuota)
-MAX_MATCH_DISTANCE_M = 50.0  # sedikit lebih ketat drpd Flow Segment Data (100m)
+MAX_MATCH_DISTANCE_M = 100.0  # sedikit lebih ketat drpd Flow Segment Data (100m)
                              # krn tile geometrinya representasi jalan langsung,
                              # bukan snapshot titik -- boleh disesuaikan
 QPS_LIMIT = 4
