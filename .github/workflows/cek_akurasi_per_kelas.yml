@@ -1,0 +1,37 @@
+name: Cek Akurasi Flow Segment Data per Kelas Jalan
+
+on:
+  workflow_dispatch: {}   # manual saja -- ini uji akurasi sekali jalan, bukan polling rutin
+
+permissions:
+  contents: read
+
+jobs:
+  cek-akurasi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pandas numpy pyproj
+
+      - name: Jalankan cek akurasi per kelas jalan
+        env:
+          TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
+        run: python cek_akurasi_per_kelas.py
+
+      - name: Upload hasil sebagai artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hasil-cek-akurasi-per-kelas
+          path: hasil_cek_akurasi_per_kelas/
+          retention-days: 14
