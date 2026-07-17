@@ -1,16 +1,21 @@
 """
-Cari Graf Bersambung Terbesar dari Segmen Tercakup TomTom
+Cari & Gabungkan Beberapa Komponen Bersambung Terbesar (Multi-Koridor)
 ================================================================================
-Input : cakupan_seluruh_jaksel_via_tile.csv (hasil deteksi cakupan, kolom
-        edge_idx + tercakup_tomtom), jaksel_topology_v2.csv (from/to/distance)
-Output: graf_bersambung_terbesar.csv (edge_idx yg jadi target polling),
-        + laporan kompleksitas (jumlah node, edge, titik percabangan) supaya
-        bisa dinilai apakah komponen ini merepresentasikan "complex urban
-        network" (banyak persimpangan/percabangan), bukan sekadar rantai lurus.
+Input : screening_seluruh_jaksel.csv (hasil screening Flow Segment Data PENUH,
+        kolom edge_idx + valid_match), jaksel_topology_v2.csv (from/to/distance)
+Output: graf_bersambung_terbesar.csv (edge_idx target polling),
+        + laporan kompleksitas PER KOMPONEN dan gabungan.
 
-GRANULARITAS TIDAK DIUBAH -- tetap level segmen topologi v2 yg sama, cuma
-DISARING ke subset yg (a) tercakup TomTom dan (b) membentuk satu komponen
-graf yg saling terhubung.
+PERUBAHAN PENTING dari versi 1-komponen sebelumnya: cakupan riil TomTom di
+Jaksel (11.9% dari screening penuh) ternyata tersebar jadi 291 komponen kecil
+terpisah -- komponen TERBESAR SENDIRIAN cuma 15 node/16 edge (~979m total),
+terlalu kecil utk representasi "complex urban network". Solusi: gabungkan
+N komponen teratas -- masing2 TETAP bersambung secara internal, tapi ANTAR
+komponen tidak saling terhubung (beberapa 'pulau' jaringan jalan terpisah).
+Ini realistis & jujur mengikuti pola cakupan TomTom yg memang tersebar,
+BUKAN dipaksakan jadi 1 jaringan menyatu yg sebenarnya tidak ada di data.
+
+GRANULARITAS TIDAK DIUBAH -- tetap level segmen topologi v2, cuma DISARING.
 """
 
 import pandas as pd
@@ -21,12 +26,20 @@ import pyproj
 # =========================================================
 # 0. KONFIGURASI
 # =========================================================
-CAKUPAN_CSV = "cakupan_seluruh_jaksel_via_tile.csv"
+CAKUPAN_CSV = "screening_seluruh_jaksel.csv"   # hasil screening Flow Segment Data
+                                                  # (BUKAN tile lagi -- tile terbukti
+                                                  # tidak valid jadi proxy cakupan)
 TOPOLOGY_V2_CSV = "jaksel_topology_v2.csv"
 NODE_MAPPING_V2_CSV = "jaksel_node_mapping_v2.csv"
 
 OUTPUT_EDGE_LIST_CSV = "graf_bersambung_terbesar.csv"
 OUTPUT_POLLING_POINTS_CSV = "polling_points_graf_terbesar.csv"
+
+# Jumlah komponen bersambung TERBESAR yg digabungkan jadi target polling.
+# Naikkan angka ini kalau masih ingin cakupan lebih luas (lebih banyak edge),
+# turunkan kalau ingin lebih hemat kuota. 15 dipilih sbg titik awal yg
+# menghasilkan skala puluhan-ratusan edge (lihat hasil cetak utk angka pasti).
+N_KOMPONEN_DIGABUNG = 15
 
 
 def main():
@@ -39,7 +52,7 @@ def main():
     )
 
     # --- 1. Filter ke edge yang tercakup TomTom saja ---
-    edge_tercakup = set(cakupan_df.loc[cakupan_df["tercakup_tomtom"] == True, "edge_idx"])
+    edge_tercakup = set(cakupan_df.loc[cakupan_df["valid_match"] == True, "edge_idx"])
     print(f"Total edge topologi v2   : {len(topo_df)}")
     print(f"Edge tercakup TomTom     : {len(edge_tercakup)} "
           f"({100*len(edge_tercakup)/len(topo_df):.1f}%)")
@@ -65,49 +78,64 @@ def main():
     # --- 3. Cari SELURUH komponen bersambung, urutkan dari terbesar ---
     komponen_list = sorted(nx.connected_components(G), key=len, reverse=True)
     print(f"\nJumlah komponen bersambung terpisah: {len(komponen_list)}")
-    print(f"\nTop 5 komponen terbesar (berdasar jumlah NODE):")
-    for i, komp in enumerate(komponen_list[:5]):
+    print(f"\nTop {min(N_KOMPONEN_DIGABUNG, len(komponen_list))} komponen terbesar (berdasar jumlah NODE):")
+    for i, komp in enumerate(komponen_list[:N_KOMPONEN_DIGABUNG]):
         subgraph = G.subgraph(komp)
         print(f"  #{i+1}: {len(komp)} node, {subgraph.number_of_edges()} pasangan edge")
 
     if len(komponen_list) == 0:
         raise RuntimeError("Tidak ada komponen bersambung sama sekali -- cek data cakupan.")
 
-    komponen_terbesar = komponen_list[0]
-    subgraph_terbesar = G.subgraph(komponen_terbesar)
+    # --- 4. GABUNGKAN N komponen teratas (TIDAK saling terhubung satu sama
+    # lain, tapi masing2 bersambung secara internal -- direpresentasikan sbg
+    # beberapa 'pulau' jaringan jalan terpisah, bukan 1 jaringan menyatu.
+    # Ini realistis krn cakupan TomTom di Jaksel memang tersebar terpisah-
+    # pisah (291 komponen terpisah dari screening penuh), bukan 1 blok utuh.
+    komponen_terpilih = komponen_list[:N_KOMPONEN_DIGABUNG]
+    semua_node_terpilih = set()
+    for komp in komponen_terpilih:
+        semua_node_terpilih |= komp
+    subgraph_gabungan = G.subgraph(semua_node_terpilih)
 
-    # --- 4. Kumpulkan SEMUA edge_idx (termasuk dua-arah) yg node-nya masuk komponen ini ---
     edge_idx_terpilih = []
-    for u, v in subgraph_terbesar.edges():
+    for u, v in subgraph_gabungan.edges():
         key = frozenset([u, v])
         edge_idx_terpilih.extend(pasangan_ke_edge_idx[key])
 
-    print(f"\n{'='*60}\nKOMPONEN TERBESAR TERPILIH\n{'='*60}")
-    print(f"Jumlah node (persimpangan) : {len(komponen_terbesar)}")
-    print(f"Jumlah edge_idx (arah)     : {len(edge_idx_terpilih)}")
+    print(f"\n{'='*60}\nGABUNGAN {len(komponen_terpilih)} KOMPONEN TERBESAR\n{'='*60}")
+    print(f"PENTING: ini {len(komponen_terpilih)} 'pulau' jaringan jalan TERPISAH")
+    print(f"(tidak saling terhubung satu sama lain), BUKAN 1 jaringan menyatu --")
+    print(f"realistis mengikuti pola cakupan TomTom yg memang tersebar di Jaksel.")
+    print(f"\nJumlah node total          : {len(semua_node_terpilih)}")
+    print(f"Jumlah edge_idx total (arah): {len(edge_idx_terpilih)}")
 
-    # --- 5. Laporan kompleksitas percabangan (bukti "complex urban network") ---
-    derajat = dict(subgraph_terbesar.degree())
-    derajat_values = list(derajat.values())
-    n_titik_cabang = sum(1 for d in derajat_values if d >= 3)  # persimpangan >2 arah
-    n_ujung_buntu = sum(1 for d in derajat_values if d == 1)
+    # --- 5. Laporan kompleksitas percabangan PER KOMPONEN + gabungan ---
+    print(f"\n--- Kompleksitas percabangan per komponen ---")
+    total_titik_cabang, total_ujung_buntu = 0, 0
+    semua_derajat = []
+    for i, komp in enumerate(komponen_terpilih):
+        sub = G.subgraph(komp)
+        derajat = dict(sub.degree())
+        d_values = list(derajat.values())
+        semua_derajat.extend(d_values)
+        n_cabang = sum(1 for d in d_values if d >= 3)
+        n_buntu = sum(1 for d in d_values if d == 1)
+        total_titik_cabang += n_cabang
+        total_ujung_buntu += n_buntu
+        print(f"  Komponen #{i+1}: {len(komp)} node, derajat maks={max(d_values)}, "
+              f"titik cabang={n_cabang} ({100*n_cabang/len(komp):.0f}%)")
 
-    print(f"\n--- Kompleksitas percabangan ---")
-    print(f"Rata-rata derajat node        : {np.mean(derajat_values):.2f}")
-    print(f"Derajat maksimum (persimpangan tersibuk) : {max(derajat_values)}")
-    print(f"Titik percabangan (derajat>=3): {n_titik_cabang} "
-          f"({100*n_titik_cabang/len(komponen_terbesar):.1f}% dari node)")
-    print(f"Jalan buntu (derajat==1)      : {n_ujung_buntu}")
+    print(f"\n--- Ringkasan gabungan ---")
+    print(f"Rata-rata derajat node (gabungan) : {np.mean(semua_derajat):.2f}")
+    print(f"Total titik percabangan (derajat>=3): {total_titik_cabang} "
+          f"({100*total_titik_cabang/len(semua_node_terpilih):.1f}% dari total node)")
+    print(f"Total jalan buntu (derajat==1)      : {total_ujung_buntu}")
 
-    if n_titik_cabang / len(komponen_terbesar) < 0.05:
-        print(f"\nPERINGATAN: cuma {100*n_titik_cabang/len(komponen_terbesar):.1f}% node yg jadi")
-        print(f"titik percabangan -- komponen ini mendekati RANTAI LURUS, kurang")
-        print(f"merepresentasikan 'complex urban network'. Pertimbangkan komponen")
-        print(f"terbesar ke-2/ke-3 kalau strukturnya lebih bercabang (cek daftar di atas),")
-        print(f"atau gabungkan beberapa komponen berdekatan.")
+    if total_titik_cabang / len(semua_node_terpilih) < 0.05:
+        print(f"\nPERINGATAN: proporsi titik percabangan gabungan masih rendah --")
+        print(f"pertimbangkan naikkan N_KOMPONEN_DIGABUNG utk cakupan lebih luas.")
     else:
-        print(f"\nOK: proporsi titik percabangan cukup signifikan, komponen ini punya")
-        print(f"struktur bercabang (bukan sekadar rantai lurus).")
+        print(f"\nOK: proporsi titik percabangan gabungan cukup signifikan.")
 
     # --- 6. Simpan daftar edge_idx target ---
     hasil_edge_df = pd.DataFrame({"edge_idx": sorted(edge_idx_terpilih)})
