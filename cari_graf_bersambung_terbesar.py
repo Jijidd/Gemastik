@@ -98,9 +98,15 @@ def main():
     subgraph_gabungan = G.subgraph(semua_node_terpilih)
 
     edge_idx_terpilih = []
-    for u, v in subgraph_gabungan.edges():
-        key = frozenset([u, v])
-        edge_idx_terpilih.extend(pasangan_ke_edge_idx[key])
+    edge_idx_ke_komponen_id = {}   # BARU -- disimpan supaya poll_tomtom_flow.py tinggal baca,
+                                     # tidak perlu membangun ulang graf/komponen dari nol
+    for komp_id, komp in enumerate(komponen_terpilih):
+        subgraph_komp = G.subgraph(komp)
+        for u, v in subgraph_komp.edges():
+            key = frozenset([u, v])
+            for eidx in pasangan_ke_edge_idx[key]:
+                edge_idx_terpilih.append(eidx)
+                edge_idx_ke_komponen_id[eidx] = komp_id
 
     print(f"\n{'='*60}\nGABUNGAN {len(komponen_terpilih)} KOMPONEN TERBESAR\n{'='*60}")
     print(f"PENTING: ini {len(komponen_terpilih)} 'pulau' jaringan jalan TERPISAH")
@@ -137,10 +143,14 @@ def main():
     else:
         print(f"\nOK: proporsi titik percabangan gabungan cukup signifikan.")
 
-    # --- 6. Simpan daftar edge_idx target ---
-    hasil_edge_df = pd.DataFrame({"edge_idx": sorted(edge_idx_terpilih)})
+    # --- 6. Simpan daftar edge_idx target, LENGKAP DENGAN component_id ---
+    hasil_edge_df = pd.DataFrame({
+        "edge_idx": sorted(edge_idx_terpilih),
+    })
+    hasil_edge_df["component_id"] = hasil_edge_df["edge_idx"].map(edge_idx_ke_komponen_id)
     hasil_edge_df.to_csv(OUTPUT_EDGE_LIST_CSV, index=False)
-    print(f"\nTersimpan: {OUTPUT_EDGE_LIST_CSV} ({len(hasil_edge_df)} edge_idx)")
+    print(f"\nTersimpan: {OUTPUT_EDGE_LIST_CSV} ({len(hasil_edge_df)} edge_idx, "
+          f"dgn kolom component_id -- 0..{len(komponen_terpilih)-1})")
 
     # --- 7. Siapkan titik polling (format siap pakai utk Flow Segment Data) ---
     transformer = pyproj.Transformer.from_crs("EPSG:32748", "EPSG:4326", always_xy=True)
@@ -153,6 +163,7 @@ def main():
         lon2, lat2 = transformer.transform(p2["x_m"], p2["y_m"])
         polling_rows.append({
             "edge_id": edge_idx,
+            "component_id": edge_idx_ke_komponen_id[edge_idx],   # BARU
             "lat": (lat1 + lat2) / 2,
             "lon": (lon1 + lon2) / 2,
             "highway_tag": "complex_corridor",  # placeholder, FRC per-edge tdk dilacak di tahap ini

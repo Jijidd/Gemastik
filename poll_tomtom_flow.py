@@ -29,9 +29,10 @@ from pathlib import Path
 # KONFIGURASI
 # =========================================================
 API_KEY = os.environ.get("TOMTOM_API_KEY", "")  # JANGAN hardcode API key di kode!
-POLLING_POINTS_CSV = "polling_points_graf_terbesar.csv"
+POLLING_POINTS_CSV = "polling_points_graf_terbesar.csv"   # HARUS punya kolom 'component_id'
 OUTPUT_DIR = "polling_results"
 STATE_FILE = "polling_state.json"
+GROUP_MAP_CACHE = "grup_berbasis_komponen.json"  # cache hasil pembagian grup, supaya konsisten antar-run
 
 QUOTA_PER_DAY = 2500          # kuota gratis TomTom non-tile request/hari
 QUOTA_SAFETY_MARGIN = 0.95    # pakai 95% dari kuota, sisakan buffer utk error/retry
@@ -161,8 +162,62 @@ def cetak_tabel_skenario(n_edges):
 
 
 # =========================================================
-# 2. FUNGSI POLLING SATU TITIK (dengan retry & backoff)
+# 1b. PEMBAGIAN GRUP BERBASIS KOMPONEN BERSAMBUNG (bukan index baris)
 # =========================================================
+def bangun_grup_berbasis_komponen(titik_df, n_groups, cache_path=GROUP_MAP_CACHE):
+    """
+    PENTING: physics constraint (chain_pairs) cuma bermakna kalau DUA EDGE
+    YANG BERTETANGGA (berbagi node) ter-poll di SIKLUS YANG SAMA -- kalau
+    tidak, tau_B(t+tau_A(t)) dihitung dari data yang terpaut jam, bukan menit.
+
+    Kolom 'component_id' SUDAH DISEDIAKAN oleh cari_graf_bersambung_terbesar.py
+    (satu sumber kebenaran, TIDAK dihitung ulang di sini) -- tugas fungsi ini
+    cuma bin-packing: taruh SATU KOMPONEN UTUH ke SATU grup yang sama (tidak
+    pernah dipecah), greedy (komponen terbesar dulu, ke grup paling kosong)
+    supaya ukuran grup tetap seimbang.
+
+    Hasil pembagian di-cache -- dihitung sekali, dipakai ulang terus supaya
+    assignment grup tidak berubah antar-run (jaga konsistensi historis data).
+    """
+    if Path(cache_path).exists():
+        with open(cache_path) as f:
+            cache = json.load(f)
+        if cache.get("n_groups") == n_groups and cache.get("n_edges") == len(titik_df):
+            print(f"Memakai cache pembagian grup dari {cache_path} (tidak dihitung ulang).")
+            return cache["edge_to_group"]
+
+    assert "component_id" in titik_df.columns, (
+        "Kolom 'component_id' tidak ditemukan -- pastikan POLLING_POINTS_CSV "
+        "dihasilkan oleh versi terbaru cari_graf_bersambung_terbesar.py"
+    )
+
+    ukuran_komponen = titik_df.groupby("component_id").size().to_dict()
+    komponen_terurut = sorted(ukuran_komponen.items(), key=lambda x: -x[1])
+
+    ukuran_grup = [0] * n_groups
+    komponen_ke_grup = {}
+    for komp_id, ukuran in komponen_terurut:
+        grup_terkecil = min(range(n_groups), key=lambda g: ukuran_grup[g])
+        komponen_ke_grup[komp_id] = grup_terkecil
+        ukuran_grup[grup_terkecil] += ukuran
+
+    edge_to_group = {
+        str(row.edge_id): komponen_ke_grup[row.component_id]
+        for row in titik_df.itertuples(index=False)
+    }
+
+    print(f"\nJumlah komponen: {len(ukuran_komponen)} -> dibagi ke {n_groups} grup")
+    print(f"Distribusi ukuran grup setelah bin-packing: {ukuran_grup}")
+    print(f"(Dibandingkan pembagian rata sempurna: {len(titik_df)/n_groups:.1f} edge/grup)")
+
+    with open(cache_path, "w") as f:
+        json.dump({"n_groups": n_groups, "n_edges": len(titik_df), "edge_to_group": edge_to_group}, f, indent=2)
+    print(f"Tersimpan cache pembagian grup: {cache_path}")
+
+    return edge_to_group
+
+
+
 def haversine_m(lat1, lon1, lat2, lon2):
     R = 6371000
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -271,9 +326,14 @@ def jalankan_satu_siklus_polling():
     state = load_state(STATE_FILE, n_groups)
     grup_sekarang = state['current_group']
 
-    # Bagi titik_df jadi n_groups bagian, ambil bagian yang giliran sekarang
+    # Bagi titik_df berdasarkan KOMPONEN BERSAMBUNG (bukan urutan baris) --
+    # supaya edge-edge yg jadi chain pair (bertetangga langsung) SELALU
+    # ter-poll di siklus/grup yang sama.
     titik_df = titik_df.reset_index(drop=True)
-    titik_df['grup'] = titik_df.index % n_groups
+    edge_to_group = bangun_grup_berbasis_komponen(titik_df, n_groups)
+    titik_df['grup'] = titik_df['edge_id'].astype(str).map(edge_to_group)
+    titik_df = titik_df.dropna(subset=['grup'])  # jaga2 ada edge yg gagal dipetakan ke komponen
+    titik_df['grup'] = titik_df['grup'].astype(int)
     subset = titik_df[titik_df['grup'] == grup_sekarang].copy()
 
     print(f"{'='*60}")
