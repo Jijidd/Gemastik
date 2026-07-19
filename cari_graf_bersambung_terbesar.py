@@ -26,7 +26,7 @@ import pyproj
 # =========================================================
 # 0. KONFIGURASI
 # =========================================================
-CAKUPAN_CSV = "screening_seluruh_jaksel.csv"   # hasil screening Flow Segment Data
+CAKUPAN_CSV = "screening_results_deduped.csv"   # hasil screening Flow Segment Data
                                                   # (BUKAN tile lagi -- tile terbukti
                                                   # tidak valid jadi proxy cakupan)
 TOPOLOGY_V2_CSV = "jaksel_topology_v2.csv"
@@ -57,9 +57,10 @@ def main():
     topo_df = pd.read_csv(TOPOLOGY_V2_CSV)
     node_df = pd.read_csv(NODE_MAPPING_V2_CSV).set_index("index")
 
-    assert len(cakupan_df) == len(topo_df), (
-        "Jumlah baris cakupan vs topologi tidak sama -- pastikan file cocok!"
-    )
+    # Validasi baru: Pastikan semua edge_idx di cakupan ada di dalam indeks topo_df
+    max_topo_idx = len(topo_df) - 1
+    if not cakupan_df["edge_idx"].between(0, max_topo_idx).all():
+        raise ValueError("Error: Terdapat edge_idx di file cakupan yang melebihi batas indeks file topologi!")
 
     # --- 1. Filter ke edge yang tercakup TomTom saja ---
     edge_tercakup = set(cakupan_df.loc[cakupan_df["valid_match"] == True, "edge_idx"])
