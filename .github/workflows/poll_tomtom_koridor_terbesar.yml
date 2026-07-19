@@ -1,13 +1,6 @@
 name: Poll TomTom Flow Segment Data (Koridor Bersambung Terbesar)
 
 on:
-  # Tiap 15 menit -- SESUAI granularitas native TomTom & dataset Beijing.
-  # Koridor final: 131 edge (gabungan 15 komponen bersambung terbesar hasil
-  # screening penuh). poll_tomtom_flow.py otomatis merotasi ~6 grup internal
-  # -- 1 edge yg sama ter-update ulang tiap ~1,5 jam (lihat hasil --rencana).
-  schedule:
-    - cron: '*/15 * * * *'
-
   workflow_dispatch: {}   # bisa juga dipicu manual kapan saja utk tes
 
 concurrency:
